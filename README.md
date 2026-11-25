@@ -7,7 +7,7 @@ over encrypted UDP (netcode.io), and sends every client a snapshot per tick.
 Clients predict their own player and reconcile; shots are lag-compensated on
 the server. The wire format is specified in `docs/netcode/protocol.md` of the
 [game repository](https://github.com/lordofthetobacco/project-blue) (protocol
-version 2); it is available here as `project-blue/docs/netcode/protocol.md`.
+version 3); it is available here as `project-blue/docs/netcode/protocol.md`.
 
 ## Getting the sources
 
@@ -32,17 +32,23 @@ git add project-blue && git commit -m "Update project-blue to <commit>"
 To build against another game checkout instead of the submodule, set
 `BLUE_NATIVE_SOURCE=<dir>` (the directory with the game's `CMakeLists.txt`).
 
+The golden vectors in `crates/blue-protocol/tests/vectors/` are generated
+here (`BLUE_BLESS=1 cargo test -p blue-protocol`). The game repository holds a
+copy in `docs/netcode/vectors/` for its C++ codec tests, and CI fails when the
+two differ. After a protocol change, copy the regenerated vectors to the game
+repository and move the submodule pin to that commit.
+
 ## What was verified where
 
 | Part | Status |
 |---|---|
-| Native build in WSL (Ubuntu 26.04, cargo 1.99), both `build.rs` paths in this layout: CMake through the `project-blue` submodule (pinned `9fd7923`), and `BLUE_NATIVE_PREBUILT`; `BLUE_NATIVE_SOURCE` accepted and rejected as documented | verified (WSL) |
+| Native build in WSL (Ubuntu 26.04, cargo 1.99), both `build.rs` paths in this layout: CMake through the `project-blue` submodule, and `BLUE_NATIVE_PREBUILT`; `BLUE_NATIVE_SOURCE` accepted and rejected as documented | verified (WSL) |
 | `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` | verified (WSL, this layout) |
 | 4-bot, 10 s run of `blue-bot` against `blue-server --sim native` (release build) | verified (WSL, this layout) |
 | 16-bot soak, 60 s, 80 ms latency, 20 ms jitter, 5% loss | verified in the previous in-repository layout; not repeated here |
 | Every `RUN` step of `Dockerfile`, rehearsed by hand in a clean WSL directory (in the previous in-repository layout) | verified there; not repeated in this layout |
 | `docker build` / `docker run` of the image | **NOT verified**: Docker is not installed on the development machine |
-| GitHub Actions `ci.yml` job | written, not yet run |
+| GitHub Actions `ci.yml` job (format, clippy, tests, golden vector comparison) | verified (runs on every push to `main`) |
 
 ## Architecture
 
@@ -254,10 +260,6 @@ leaves the token service and the servers.
 ## Known limits
 
 - Docker image not built or run yet (see the table at the top).
-- The game repository still carries its own copy of this workspace under
-  `server/`, including the golden vectors its C++ tests read; the two copies
-  of `crates/blue-protocol/tests/vectors/` must stay identical until that copy
-  is removed.
 - One scene per process; no match lifecycle, no token service, no
   matchmaking, no anti-cheat beyond server authority and input validation.
 - netcode's own C allocations are outside the Rust no-allocation check.

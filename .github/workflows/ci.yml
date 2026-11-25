@@ -33,6 +33,10 @@ jobs:
           restore-keys: |
             server-${{ runner.os }}-
 
+      # The game repository's C++ codec tests read a copy of the golden vectors.
+      - name: Golden vectors match the game repository
+        run: diff -r crates/blue-protocol/tests/vectors project-blue/docs/netcode/vectors
+
       - name: Format
         run: cargo fmt --all --check
 
