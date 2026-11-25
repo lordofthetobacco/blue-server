@@ -1,13 +1,15 @@
 # Project Blue dedicated server image.
 #
-# Build from the REPOSITORY ROOT (the native simulation is built from the
-# C++ sources there):
-#   server/scripts/stage-assets.sh            # fills server/assets/
-#   docker build -f server/Dockerfile -t blue-server .
+# Build from the root of this repository, with the `project-blue` submodule
+# (the game repository: the native simulation is built from its C++ sources)
+# checked out and the assets staged:
+#   git submodule update --init
+#   scripts/stage-assets.sh                   # fills assets/
+#   docker build -t blue-server .
 #
 # NOTE: Docker was not available on the machine this file was written on.
 # Every RUN step was rehearsed by hand in a clean WSL directory (see
-# server/README.md), but the image itself has not been built or run yet.
+# README.md), but the image itself has not been built or run yet.
 #
 # Debian 13 (trixie) for both stages: the C++ code needs GCC >= 13
 # (<format>), which Debian 12 does not ship, and the runtime must provide
@@ -29,9 +31,9 @@ WORKDIR /src
 # --- Layer 1: native libraries (blue_sim_c + netcode) ----------------------
 # Only what the BLUE_SIM_ONLY configure and build read, so Rust-only changes
 # reuse this layer. Tests are off, so tests/sim is not needed.
-COPY CMakeLists.txt CMakePresets.json ./
-COPY cmake/ cmake/
-COPY src/ src/
+COPY project-blue/CMakeLists.txt project-blue/CMakePresets.json ./
+COPY project-blue/cmake/ cmake/
+COPY project-blue/src/ src/
 # Jolt is compiled with AVX2/BMI/F16C/LZCNT (x86-64-v3 class); the server
 # refuses to start the native sim on an older CPU.
 RUN cmake -S . -B /native \
@@ -41,12 +43,10 @@ RUN cmake -S . -B /native \
 # --- Layer 2: the Rust workspace -------------------------------------------
 # The workspace has no external crates, so there is no dependency layer to
 # cache separately (cargo-chef would add nothing).
-COPY server/Cargo.toml server/Cargo.lock server/rust-toolchain.toml \
-     server/rustfmt.toml server/clippy.toml server/
-COPY server/crates/ server/crates/
+COPY Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml clippy.toml ./
+COPY crates/ crates/
 
 # --- Layer 3: the server binary, linked against layer 1 ---------------------
-WORKDIR /src/server
 ENV BLUE_NATIVE_PREBUILT=/native
 RUN cargo build --release --locked -p blue-server \
  && strip --strip-debug target/release/blue-server \
@@ -56,12 +56,12 @@ FROM ${RUNTIME_IMAGE}
 
 LABEL org.opencontainers.image.title="blue-server" \
       org.opencontainers.image.description="Project Blue authoritative dedicated game server (UDP netcode.io, 60 Hz)" \
-      org.opencontainers.image.source="https://github.com/lordofthetobacco/project-blue" \
+      org.opencontainers.image.source="https://github.com/lordofthetobacco/blue-server" \
       org.opencontainers.image.vendor="Project Blue"
 
 COPY --from=builder /blue-server /usr/local/bin/blue-server
-# Cooked scene and weapon data staged by server/scripts/stage-assets.*.
-COPY server/assets/ /assets/
+# Cooked scene and weapon data staged by scripts/stage-assets.*.
+COPY assets/ /assets/
 
 ENV BLUE_SIM=native \
     BLUE_ASSET_DIR=/assets \

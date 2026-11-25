@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server:
+    name: server (Rust)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # rustup reads rust-toolchain.toml (channel + clippy, rustfmt)
+      # and installs it on first use.
+      - name: Toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo and native build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: server-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'project-blue/CMakeLists.txt', 'project-blue/cmake/**', 'project-blue/src/**') }}
+          restore-keys: |
+            server-${{ runner.os }}-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace

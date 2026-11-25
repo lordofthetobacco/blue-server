@@ -6,9 +6,9 @@
 //! world-object state ([`player`], [`object`]), the reliable-ordered channel
 //! ([`reliable`]) and the top-level packets ([`packet`]).
 //!
-//! The normative specification is `docs/netcode/protocol.md` at the
-//! repository root; the C++ client codec is written from it and checked
-//! against the golden vectors in `tests/vectors/`.
+//! The normative specification is `docs/netcode/protocol.md` in the game
+//! repository (the `project-blue` submodule); the C++ client codec is written
+//! from it and checked against the golden vectors in `tests/vectors/`.
 //!
 //! Encoding writes into caller-provided buffers and decoding fills
 //! caller-provided fixed-capacity values: nothing allocates. Decoding never

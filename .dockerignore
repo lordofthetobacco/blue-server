@@ -1,5 +1,26 @@
-# The supported build context is the repository root (see the root
-# .dockerignore and server/Dockerfile). This file only keeps a build with
-# server/ as the context from sending build output.
-target/
+# Allow-list: exclude everything, then re-include exactly what the Dockerfile
+# copies (see Dockerfile). Build context = the root of this repository.
+*
+
+# Layer 1: native sources, from the project-blue submodule.
+!project-blue/CMakeLists.txt
+!project-blue/CMakePresets.json
+!project-blue/cmake/
+!project-blue/src/
+
+# Layer 2: the Rust workspace.
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!rustfmt.toml
+!clippy.toml
+!crates/
+
+# Runtime image: staged by scripts/stage-assets.*.
+!assets/
+
+# Never send build output or editor state, even inside re-included paths.
 **/target/
+**/.vscode/
+**/.idea/
+**/.vs/

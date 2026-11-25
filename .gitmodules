@@ -1,0 +1,3 @@
+[submodule "project-blue"]
+	path = project-blue
+	url = https://github.com/lordofthetobacco/project-blue.git

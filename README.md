@@ -5,19 +5,44 @@ runs the same C++ simulation as the game client (movement, collision,
 ballistics, damage) at 60 Hz, receives each player's tick-stamped commands
 over encrypted UDP (netcode.io), and sends every client a snapshot per tick.
 Clients predict their own player and reconcile; shots are lag-compensated on
-the server. The wire format is specified in
-[`docs/netcode/protocol.md`](../docs/netcode/protocol.md) (protocol version 2).
+the server. The wire format is specified in `docs/netcode/protocol.md` of the
+[game repository](https://github.com/lordofthetobacco/project-blue) (protocol
+version 2); it is available here as `project-blue/docs/netcode/protocol.md`.
+
+## Getting the sources
+
+```sh
+git clone --recurse-submodules https://github.com/lordofthetobacco/blue-server
+# or, in an existing clone:
+git submodule update --init
+```
+
+The `project-blue` submodule is the game repository, pinned to a commit. It
+provides the C++ simulation (`blue_sim_c`) and `netcode` sources that
+`crates/blue-native` builds and links, and the protocol specification
+`project-blue/docs/netcode/protocol.md`. To move the pin to a newer game
+commit:
+
+```sh
+git -C project-blue fetch
+git -C project-blue checkout <commit>
+git add project-blue && git commit -m "Update project-blue to <commit>"
+```
+
+To build against another game checkout instead of the submodule, set
+`BLUE_NATIVE_SOURCE=<dir>` (the directory with the game's `CMakeLists.txt`).
 
 ## What was verified where
 
 | Part | Status |
 |---|---|
-| Native build in WSL (Ubuntu 26.04, cargo 1.99, CMake 4.2, GCC 15), both `build.rs` paths (CMake and `BLUE_NATIVE_PREBUILT`) | verified |
-| `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` | verified (WSL) |
-| 16-bot soak, 60 s, 80 ms latency, 20 ms jitter, 5% loss, stand-in and native simulation | verified (WSL) |
-| Every `RUN` step of `server/Dockerfile`, rehearsed by hand in a clean WSL directory | verified |
+| Native build in WSL (Ubuntu 26.04, cargo 1.99), both `build.rs` paths in this layout: CMake through the `project-blue` submodule (pinned `9fd7923`), and `BLUE_NATIVE_PREBUILT`; `BLUE_NATIVE_SOURCE` accepted and rejected as documented | verified (WSL) |
+| `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` | verified (WSL, this layout) |
+| 4-bot, 10 s run of `blue-bot` against `blue-server --sim native` (release build) | verified (WSL, this layout) |
+| 16-bot soak, 60 s, 80 ms latency, 20 ms jitter, 5% loss | verified in the previous in-repository layout; not repeated here |
+| Every `RUN` step of `Dockerfile`, rehearsed by hand in a clean WSL directory (in the previous in-repository layout) | verified there; not repeated in this layout |
 | `docker build` / `docker run` of the image | **NOT verified**: Docker is not installed on the development machine |
-| GitHub Actions `server` job | written, not yet run |
+| GitHub Actions `ci.yml` job | written, not yet run |
 
 ## Architecture
 
@@ -48,21 +73,23 @@ F16C, LZCNT, POPCNT; Intel Haswell / AMD Excavator or newer) for the native
 simulation; the server refuses to start it on an older CPU.
 
 ```sh
-cd server
-export CARGO_TARGET_DIR=$HOME/.cache/project-blue/target   # keep build output off /mnt/c
+git submodule update --init
+export CARGO_TARGET_DIR=$HOME/.cache/blue-server/target     # keep build output off /mnt/c
 cargo build --release -p blue-server -p blue-bot             # runs CMake once (minutes)
 cargo test --workspace
 ```
 
-`build.rs` runs CMake (`BLUE_SIM_ONLY=ON`, `BLUE_BUILD_TESTS=OFF`,
+`build.rs` runs CMake on the `project-blue` submodule (or on
+`BLUE_NATIVE_SOURCE`; `BLUE_SIM_ONLY=ON`, `BLUE_BUILD_TESTS=OFF`,
 `RelWithDebInfo`) inside the cargo target directory and links
 `blue_sim_c` + `netcode` from the link manifest CMake writes. To link an
-existing sim-only build instead (faster iteration, the Docker build):
+existing sim-only build instead (faster iteration, the Docker build; the
+submodule need not be checked out then):
 
 ```sh
-cmake -S .. -B $HOME/.cache/project-blue/sim-only -DBLUE_SIM_ONLY=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build $HOME/.cache/project-blue/sim-only --target blue_sim_c netcode
-BLUE_NATIVE_PREBUILT=$HOME/.cache/project-blue/sim-only cargo build --release -p blue-server
+cmake -S project-blue -B $HOME/.cache/blue-server/sim-only -DBLUE_SIM_ONLY=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build $HOME/.cache/blue-server/sim-only --target blue_sim_c netcode
+BLUE_NATIVE_PREBUILT=$HOME/.cache/blue-server/sim-only cargo build --release -p blue-server
 ```
 
 Run:
@@ -71,7 +98,7 @@ Run:
 # Stand-in simulation (pure Rust, flat plane, no weapons; no assets needed):
 target/release/blue-server --sim standin
 # The real simulation:
-target/release/blue-server --sim native --asset-dir ../server/assets --scene range.mscn
+target/release/blue-server --sim native --asset-dir assets --scene range.mscn
 ```
 
 ## Staging assets
@@ -80,16 +107,17 @@ The native simulation needs the cooked scene and prefabs (collision and
 weapon data). Copy them from a game build:
 
 ```sh
-server/scripts/stage-assets.sh  [GAME_ASSET_DIR]     # Linux / WSL
-server/scripts/stage-assets.ps1 [-SourceDir DIR]     # Windows
+scripts/stage-assets.sh  [GAME_ASSET_DIR]     # Linux / WSL
+scripts\stage-assets.ps1 [-SourceDir DIR]     # Windows
 ```
 
-`GAME_ASSET_DIR` defaults to `out/build/x64-release/bin/assets`. The scripts
-empty `server/assets/` (gitignored) and copy `range.mscn`, every `*.pbo` and
+`GAME_ASSET_DIR` defaults to `../project-blue/out/build/x64-release/bin/assets`,
+a game checkout next to this repository. The scripts
+empty `assets/` (gitignored) and copy `range.mscn`, every `*.pbo` and
 every `*.cfg` (weapon catalogue), keeping relative paths, then print the
 list and total size (currently 25 files, about 414 MB). The sky HDR,
 fingerprints and generated scene files are skipped. Nothing outside
-`server/assets/` is touched.
+`assets/` is touched.
 
 ## Configuration
 
@@ -122,16 +150,17 @@ works for local clients and is logged as a warning.
 ## Container
 
 ```sh
-server/scripts/stage-assets.sh
-docker build -f server/Dockerfile -t blue-server .      # context = repo root
+git submodule update --init
+scripts/stage-assets.sh
+docker build -t blue-server .                           # context = this repository's root
 docker run --rm -p 27015:27015/udp -p 9100:9100 \
   -e BLUE_PUBLIC_ADDR=<host-ip>:27015 -e BLUE_PRIVATE_KEY=<64 hex> blue-server
 ```
 
 - Multi-stage build: `rust:1.99.0-slim-trixie` builder (pinned by digest)
-  builds `blue_sim_c` + `netcode` in their own layer (only `CMakeLists.txt`,
-  `CMakePresets.json`, `cmake/` and `src/` are copied first, so Rust-only
-  changes reuse it), then the Rust workspace against it via
+  builds `blue_sim_c` + `netcode` in their own layer (only the submodule's
+  `CMakeLists.txt`, `CMakePresets.json`, `cmake/` and `src/` are copied first,
+  so Rust-only changes reuse it), then the Rust workspace against it via
   `BLUE_NATIVE_PREBUILT`. The build needs network access (FetchContent).
 - Runtime: `gcr.io/distroless/cc-debian13:nonroot` (glibc + libstdc++, no
   shell), same Debian release as the builder. The binary needs only
@@ -225,6 +254,10 @@ leaves the token service and the servers.
 ## Known limits
 
 - Docker image not built or run yet (see the table at the top).
+- The game repository still carries its own copy of this workspace under
+  `server/`, including the golden vectors its C++ tests read; the two copies
+  of `crates/blue-protocol/tests/vectors/` must stay identical until that copy
+  is removed.
 - One scene per process; no match lifecycle, no token service, no
   matchmaking, no anti-cheat beyond server authority and input validation.
 - netcode's own C allocations are outside the Rust no-allocation check.
