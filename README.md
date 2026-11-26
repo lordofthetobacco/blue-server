@@ -47,7 +47,12 @@ repository and move the submodule pin to that commit.
 | 4-bot, 10 s run of `blue-bot` against `blue-server --sim native` (release build) | verified (WSL, this layout) |
 | 16-bot soak, 60 s, 80 ms latency, 20 ms jitter, 5% loss | verified in the previous in-repository layout; not repeated here |
 | Every `RUN` step of `Dockerfile`, rehearsed by hand in a clean WSL directory (in the previous in-repository layout) | verified there; not repeated in this layout |
-| `docker build` / `docker run` of the image | **NOT verified**: Docker is not installed on the development machine |
+| `docker build -t blue-server .` cold (`--no-cache`, `NATIVE_JOBS=8`) and `--target bot`, linux/arm64 | verified on 2026-11-26 (Apple M4, macOS, Docker Desktop 29.9, aarch64 VM): 62 s, exit 0; blue-server 295 MB, blue-bot 54.8 MB |
+| The same images for linux/amd64 | verified only under Docker Desktop's emulation on Apple silicon (cold server build about 5 min; the AVX2 check passes and the native sim runs): 285 MB and 43.9 MB; **not run on real x86 hardware** |
+| `scripts/smoke-test.sh standin` and `native`, arm64 and emulated amd64 | verified (same machine): both phases (shared network namespace; published UDP port through the docker bridge gateway) pass, bots 2/2, server exits 0 about 0.2 s after SIGTERM |
+| 16 bots, 30 s, `--latency 80 --jitter 20 --loss 5 --aim` against the arm64 container with the native sim | verified (same machine): 16/16 passed, tick p99 1.8 ms, 0 overruns, 0 kicked, 0 invalid packets |
+| `scripts/cook-assets.sh` (Docker cook of the assets) | verified (same machine): 26 files, 148 MB, 1m14s cold on arm64, 5m37s emulated amd64; two arm64 cooks are byte-identical; arm64 vs amd64: `range.mscn` and `weapons/catalog/base.cfg` identical, 14 large `.pbo` differ in bytes. `content_hash` is `6f8d22500fa02996` for all four combinations of arm64/amd64 image and arm64/amd64-cooked assets |
+| `content_hash` of a Windows game build's assets against the Docker cook | **NOT verified**: no Windows build on that machine |
 | GitHub Actions `ci.yml` job (format, clippy, tests, golden vector comparison) | verified (runs on every push to `main`) |
 
 ## Architecture
@@ -74,9 +79,10 @@ one snapshot per client. The steady-state tick does not allocate.
 
 Requirements: Rust 1.99 (rustup reads `rust-toolchain.toml`), CMake >= 3.25,
 make, GCC >= 13 (`<format>`), git and network access (CMake fetches glm,
-SDL3, JoltPhysics and netcode on the first build). CPU: x86-64-v3 (AVX2, BMI1,
-F16C, LZCNT, POPCNT; Intel Haswell / AMD Excavator or newer) for the native
-simulation; the server refuses to start it on an older CPU.
+SDL3, JoltPhysics and netcode on the first build). CPU, on x86-64: x86-64-v3
+(AVX2, BMI1, F16C, LZCNT, POPCNT; Intel Haswell / AMD Excavator or newer) for
+the native simulation; the server refuses to start it on an older CPU. arm64
+has no such requirement.
 
 ```sh
 git submodule update --init
@@ -110,18 +116,35 @@ target/release/blue-server --sim native --asset-dir assets --scene range.mscn
 ## Staging assets
 
 The native simulation needs the cooked scene and prefabs (collision and
-weapon data). Copy them from a game build:
+weapon data). Either cook them from the submodule with Docker, which needs no
+game build, or copy them from a game build:
 
 ```sh
-scripts/stage-assets.sh  [GAME_ASSET_DIR]     # Linux / WSL
+scripts/cook-assets.sh [JOBS]                 # Docker; Linux, macOS, WSL
+scripts/stage-assets.sh  [GAME_ASSET_DIR]     # Linux / macOS / WSL
 scripts\stage-assets.ps1 [-SourceDir DIR]     # Windows
 ```
+
+`cook-assets.sh` runs `docker/assets.Dockerfile`: it builds the game's
+`blue-pack` tool on Linux (Debian 13, Vulkan headers, Slang 2026.17 pinned by
+checksum; no GPU), runs `blue-pack samples` on the submodule's `samples/` and
+exports the same file set as below into `assets/`. `JOBS` caps the compile
+jobs (default: all CPUs). It works on linux/arm64 and linux/amd64 and needs
+network access. Result: 26 files, 148 MB (full-quality textures; 1m14s cold
+on arm64). The cook is deterministic on one architecture; across
+architectures `range.mscn` and `weapons/catalog/base.cfg` are identical but 14
+large `.pbo` files differ in bytes (see the table above). It has not been
+compared with a Windows game build's assets: if the `content_hash` the server
+logs at start differs from your clients', stage the game build's assets with
+`stage-assets.*` instead.
 
 `GAME_ASSET_DIR` defaults to `../project-blue/out/build/x64-release/bin/assets`,
 a game checkout next to this repository. The scripts
 empty `assets/` (gitignored) and copy `range.mscn`, every `*.pbo` and
 every `*.cfg` (weapon catalogue), keeping relative paths, then print the
-list and total size (currently 25 files, about 414 MB). The sky HDR,
+list and total size (25 files, about 414 MB for the Windows game build this
+was first written against; that figure could not be reproduced, and the
+Docker cook gives 26 files, 148 MB). The sky HDR,
 fingerprints and generated scene files are skipped. Nothing outside
 `assets/` is touched.
 
@@ -157,15 +180,28 @@ works for local clients and is logged as a warning.
 
 ```sh
 git submodule update --init
-scripts/stage-assets.sh
+scripts/cook-assets.sh                                  # or scripts/stage-assets.sh <game assets>
 docker build -t blue-server .                           # context = this repository's root
 docker run --rm -p 27015:27015/udp -p 9100:9100 \
   -e BLUE_PUBLIC_ADDR=<host-ip>:27015 -e BLUE_PRIVATE_KEY=<64 hex> blue-server
+docker build --target bot -t blue-bot .                 # blue-bot load client, no assets/ needed
+scripts/smoke-test.sh [standin|native]                  # needs both images; native needs assets/
 ```
+
+- `--platform linux/amd64` or `linux/arm64` selects the architecture (one
+  Dockerfile; default: the Docker host's). `--build-arg NATIVE_JOBS=<n>` limits
+  the native build's parallelism (default: `nproc`).
+- `scripts/smoke-test.sh` starts the server container, waits for `/readyz`,
+  runs `blue-bot` against it (once in the server's network namespace, once
+  through the published UDP port), requires exit 0 and requires the server to
+  exit 0 within 2 s of `docker stop`. `PLATFORM`, `IMAGE`, `BOT_IMAGE`,
+  `BOT_COUNT`, `BOT_DURATION` and `READY_TIMEOUT` are environment variables
+  (see the script header).
 
 - Multi-stage build: `rust:1.99.0-slim-trixie` builder (pinned by digest)
   builds `blue_sim_c` + `netcode` in their own layer (only the submodule's
-  `CMakeLists.txt`, `CMakePresets.json`, `cmake/` and `src/` are copied first,
+  `CMakeLists.txt`, `CMakePresets.json`, `cmake/`, `src/` and
+  `tools/net-probe/` are copied first,
   so Rust-only changes reuse it), then the Rust workspace against it via
   `BLUE_NATIVE_PREBUILT`. The build needs network access (FetchContent).
 - Runtime: `gcr.io/distroless/cc-debian13:nonroot` (glibc + libstdc++, no
@@ -176,7 +212,15 @@ docker run --rm -p 27015:27015/udp -p 9100:9100 \
 - Publish the game port as **UDP** (`-p 27015:27015/udp`); the TCP mapping
   is only for metrics.
 - No `HEALTHCHECK` (there is no shell); probe `GET /healthz` instead.
-- Image size is dominated by the assets (about 414 MB).
+- Image size on 2026-11-26: blue-server 295 MB (arm64) / 285 MB (amd64), of
+  which the assets are 148 MB; blue-bot 54.8 MB / 43.9 MB.
+
+CI (the `container` job in `.github/workflows/ci.yml`) cooks the assets,
+builds both images, runs `scripts/smoke-test.sh` in both modes and, on pushes
+to `main`, pushes the image that passed as
+`ghcr.io/lordofthetobacco/blue-server:latest` and `:sha-<commit>` (7-character
+commit; `linux/amd64` only; `blue-bot` is not pushed). Pull it with
+`docker pull ghcr.io/lordofthetobacco/blue-server:latest`.
 
 ### Kubernetes notes
 
@@ -259,7 +303,10 @@ leaves the token service and the servers.
 
 ## Known limits
 
-- Docker image not built or run yet (see the table at the top).
+- The linux/amd64 images were only built and run under emulation on Apple
+  silicon, not on real x86 hardware.
+- The Docker-cooked assets were not compared with a Windows game build's
+  assets: their `content_hash` is unverified against a Windows client's.
 - One scene per process; no match lifecycle, no token service, no
   matchmaking, no anti-cheat beyond server authority and input validation.
 - netcode's own C allocations are outside the Rust no-allocation check.

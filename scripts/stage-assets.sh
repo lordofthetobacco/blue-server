@@ -31,7 +31,7 @@ while IFS= read -r -d '' file; do
   relative="${file#"${source_dir}/"}"
   mkdir -p "${target_dir}/$(dirname "${relative}")"
   cp "${file}" "${target_dir}/${relative}"
-  printf '  %10d  %s\n' "$(stat -c %s "${file}")" "${relative}"
+  printf '  %10d  %s\n' "$(wc -c < "${file}")" "${relative}"
   count=$((count + 1))
 done < <(find "${source_dir}" -type f \
   \( -name 'range.mscn' -o -name '*.pbo' -o -name '*.cfg' \) -print0 | sort -z)

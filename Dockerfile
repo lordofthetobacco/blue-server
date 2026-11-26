@@ -4,20 +4,25 @@
 # (the game repository: the native simulation is built from its C++ sources)
 # checked out and the assets staged:
 #   git submodule update --init
-#   scripts/stage-assets.sh                   # fills assets/
+#   scripts/cook-assets.sh                    # fills assets/ (Docker cook), or
+#   scripts/stage-assets.sh <game assets>     # copies them from a game build
 #   docker build -t blue-server .
 #
-# NOTE: Docker was not available on the machine this file was written on.
-# Every RUN step was rehearsed by hand in a clean WSL directory (see
-# README.md), but the image itself has not been built or run yet.
+# Targets: the last stage (default) is the server image; `--target bot`
+# builds the blue-bot load/test client image, which needs no assets/:
+#   docker build --target bot -t blue-bot .
+# One Dockerfile for linux/amd64 (production) and linux/arm64; add
+# --platform to choose. --build-arg NATIVE_JOBS=<n> limits native build
+# parallelism (default: nproc).
 #
 # Debian 13 (trixie) for both stages: the C++ code needs GCC >= 13
 # (<format>), which Debian 12 does not ship, and the runtime must provide
 # the same (or newer) glibc/libstdc++ the builder linked against.
 ARG RUST_IMAGE=rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581
-ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de
+ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot@sha256:29ee70762214fe8190cea04ef1c0a84a8365879e047ce8f911ae5a5ab2355fa2
 
 FROM ${RUST_IMAGE} AS builder
+ARG NATIVE_JOBS
 
 # cmake (trixie: 3.31, the repo needs >= 3.25), make and g++ (14) for the
 # native build; git and ca-certificates because CMake's FetchContent clones
@@ -34,11 +39,15 @@ WORKDIR /src
 COPY project-blue/CMakeLists.txt project-blue/CMakePresets.json ./
 COPY project-blue/cmake/ cmake/
 COPY project-blue/src/ src/
-# Jolt is compiled with AVX2/BMI/F16C/LZCNT (x86-64-v3 class); the server
-# refuses to start the native sim on an older CPU.
+# blue-net-probe is declared before the BLUE_SIM_ONLY cut-off, so CMake needs
+# its sources to generate (the target itself is not built).
+COPY project-blue/tools/net-probe/ tools/net-probe/
+# On x86-64 Jolt is compiled with AVX2/BMI/F16C/LZCNT (x86-64-v3 class); the
+# server refuses to start the native sim on an older CPU. On arm64 there is
+# no such requirement.
 RUN cmake -S . -B /native \
         -DBLUE_SIM_ONLY=ON -DBLUE_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo \
- && cmake --build /native --target blue_sim_c netcode --parallel "$(nproc)"
+ && cmake --build /native --target blue_sim_c netcode --parallel "${NATIVE_JOBS:-$(nproc)}"
 
 # --- Layer 2: the Rust workspace -------------------------------------------
 # The workspace has no external crates, so there is no dependency layer to
@@ -46,12 +55,21 @@ RUN cmake -S . -B /native \
 COPY Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml clippy.toml ./
 COPY crates/ crates/
 
-# --- Layer 3: the server binary, linked against layer 1 ---------------------
+# --- Layer 3: the server and bot binaries, linked against layer 1 ---------------------
 ENV BLUE_NATIVE_PREBUILT=/native
-RUN cargo build --release --locked -p blue-server \
- && strip --strip-debug target/release/blue-server \
- && cp target/release/blue-server /blue-server
+# blue-bot depends on blue-server and blue-native, so both binaries come out
+# of the same build against the same native layer.
+RUN cargo build --release --locked -p blue-server -p blue-bot \
+ && strip --strip-debug target/release/blue-server target/release/blue-bot \
+ && cp target/release/blue-server target/release/blue-bot /
 
+# --- Bot image (--target bot): needs no assets/ --------------------------------
+FROM ${RUNTIME_IMAGE} AS bot
+COPY --from=builder /blue-bot /usr/local/bin/blue-bot
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/blue-bot"]
+
+# --- Server image (default target, must stay last) -------------------------
 FROM ${RUNTIME_IMAGE}
 
 LABEL org.opencontainers.image.title="blue-server" \

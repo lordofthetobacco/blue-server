@@ -1,0 +1,10 @@
+# Build context for docker/assets.Dockerfile: the repository root. Only the
+# project-blue submodule is copied.
+*
+!project-blue/
+project-blue/docs/
+project-blue/tests/
+project-blue/.git
+**/out/
+**/build/
+**/.vs/
