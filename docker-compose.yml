@@ -1,0 +1,9 @@
+services:
+  blue-server:
+    image: ghcr.io/lordofthetobacco/blue-server:sha-f9c7e57
+    platform: linux/amd64
+    ports:
+      - "27015:27015/udp"
+      - "9100:9100/tcp"
+    environment:
+      BLUE_PUBLIC_ADDR: "127.0.0.1:27015"
