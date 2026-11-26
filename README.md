@@ -215,6 +215,13 @@ scripts/smoke-test.sh [standin|native]                  # needs both images; nat
 - Image size on 2026-11-26: blue-server 295 MB (arm64) / 285 MB (amd64), of
   which the assets are 148 MB; blue-bot 54.8 MB / 43.9 MB.
 
+CI (the `container` job in `.github/workflows/ci.yml`) cooks the assets,
+builds both images, runs `scripts/smoke-test.sh` in both modes and, on pushes
+to `main`, pushes the image that passed as
+`ghcr.io/lordofthetobacco/blue-server:latest` and `:sha-<commit>` (7-character
+commit; `linux/amd64` only; `blue-bot` is not pushed). Pull it with
+`docker pull ghcr.io/lordofthetobacco/blue-server:latest`.
+
 ### Kubernetes notes
 
 - One match per pod; the server holds all match state in memory.
